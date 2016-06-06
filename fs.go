@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/goftp/ftp"
@@ -35,7 +36,7 @@ func (fs *FS) Open(name string) (http.File, error) {
 		}
 	}
 
-	if len(ls) == 1 && !isDir(ls[0]) && name == ls[0].Name {
+	if len(ls) == 1 && !isDir(ls[0]) && nameMatch(name, ls[0].Name) {
 		// it is a file
 		return &ftpFile{
 			sc:    sc,
@@ -45,6 +46,14 @@ func (fs *FS) Open(name string) (http.File, error) {
 		}, nil
 	}
 	return newFtpDir(name, ls), nil
+}
+
+func nameMatch(path, name string) bool {
+	if path == name {
+		return true
+	}
+	base := filepath.Base(path)
+	return base == name
 }
 
 func isDir(e *ftp.Entry) bool {
@@ -95,13 +104,14 @@ func (f *ftpFile) Read(b []byte) (n int, err error) {
 		if f.next >= f.bufStart && f.next < f.bufStart+l {
 			n = copy(b, f.buf[f.next-f.bufStart:l])
 			f.next += uint64(n)
-			return n, nil
+			if n == len(b) {
+				return n, nil
+			}
 		}
 		if f.readCloser != nil {
-			c := f.readCloser
-			f.readCloser = nil
 			// TODO: handle close connection correctly !?
-			go c.Close()
+			f.readCloser.Close()
+			f.readCloser = nil
 		}
 	}
 	if f.readCloser == nil {
@@ -113,13 +123,14 @@ func (f *ftpFile) Read(b []byte) (n int, err error) {
 		f.offset = f.next
 		f.bufStart = f.next
 	}
-	n, err = f.readCloser.Read(b)
+	nn, err := f.readCloser.Read(b[n:])
+	nn += n
 	if f.offset-f.bufStart < bufLen {
-		copy(f.buf[f.offset-f.bufStart:], b)
+		copy(f.buf[f.offset-f.bufStart:], b[n:nn])
 	}
-	f.offset += uint64(n)
+	f.offset += uint64(nn)
 	f.next = f.offset
-	return n, err
+	return nn, err
 }
 
 func (f *ftpFile) Seek(offset int64, whence int) (int64, error) {
